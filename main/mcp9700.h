@@ -2,11 +2,12 @@
 #define MCP9700A_H_
 
 #include "adc.h"
+#include <time.h>
 
 class MCP9700A
 {
     public:
-        MCP9700A(adc_channel_t channel);
+        MCP9700A();
         virtual ~MCP9700A();
         
         void sendTemp();
@@ -14,10 +15,8 @@ class MCP9700A
         float getTemp();
 
     private:
-        float temperature;
-        // void readTemp();
-        Adc *m_adc;
-        
+        double m_temperature;
+        // Adc *m_adc;
 };
 
 #endif

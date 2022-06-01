@@ -1,9 +1,9 @@
 #include "mcp9700.h"
 
-MCP9700A::MCP9700A(adc_channel_t channel)
+MCP9700A::MCP9700A()
 {
-    temperature = 0;
-    m_adc = new Adc(channel);
+    m_temperature = 0;
+    // m_adc = new Adc(channel);
 }
 
 MCP9700A::~MCP9700A()
@@ -18,14 +18,22 @@ void MCP9700A::sendTemp()
 
 void MCP9700A::readTemp()
 {
-    uint32_t voltage = m_adc->readAdc();
+    FILE *fp;
+    char str[5];
 
-    temperature = voltage;
+    fp = fopen ("temperature.txt","r");
 
-    // this->temperature = 38.0;
+    srand(time(NULL));
+    int position = rand() % 21;
+    fseek(fp, position, SEEK_SET);
+    fgets(str, 5, fp);
+
+    m_temperature = strtod(str, NULL);
+
+    fclose(fp);
 }
 
 float MCP9700A::getTemp()
 {
-    return temperature;
+    return m_temperature;
 }
