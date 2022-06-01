@@ -23,4 +23,22 @@ menu "Example Configuration"
         int
         default 20000
 
+    config BLINK_LED_RMT_CHANNEL
+        int "RMT Channel"
+        range 0 7
+        default 0
+        help
+            Set the RMT peripheral channel.
+            ESP32 RMT channel from 0 to 7
+            ESP32-S2 RMT channel from 0 to 3
+            ESP32-S3 RMT channel from 0 to 3
+            ESP32-C3 RMT channel from 0 to 1
+
+    config BLINK_PERIOD
+        int "Blink period in ms"
+        range 10 3600000
+        default 1000
+        help
+            Define the blinking period in milliseconds.
+
 endmenu
