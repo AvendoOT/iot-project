@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
@@ -14,17 +16,22 @@
 #include "esp_ota_ops.h"
 #include <sys/param.h>
 #include "led_strip.h"
+#include "driver/temp_sensor.h"
 #include "808H5V5.h"
-#include "mcp9700.h"
 #include "CLed.h"
 
-#define CHANNEL1 ADC_CHANNEL_6
-#define LED_PIN 8
-#define ACTIVATE_TOPIC "activate"
+#define ADC_CHANNEL_HUMIDITY ADC_CHANNEL_1
+#define LED_PIN_NUM 8
+#define ROOM_1_ACTUATOR_TOPIC "actuator/22"
+#define ROOM_2_ACTUATOR_TOPIC "actuator/23"
+#define SEND_DATA_TOPIC "device/22/data"
+#define ROOM_1_ACTUATOR_NUM 22
+#define ROOM_2_ACTUATOR_NUM 23
 
 static const char *TAG_MAIN = "iot-project";
 
-bool isLed = false;
+bool isOpen_room1 = false;
+bool isOpen_room2 = false;
 
 extern const uint8_t cert_start[] asm("_binary_AmazonRootCA1_pem_start");
 extern const uint8_t cert_end[] asm("_binary_AmazonRootCA1_pem_end");
@@ -33,25 +40,67 @@ extern const uint8_t certificate_end[] asm("_binary_certificate_pem_crt_end");
 extern const uint8_t private_start[] asm("_binary_private_pem_key_start");
 extern const uint8_t private_end[] asm("_binary_private_pem_key_end");
 
-esp_mqtt_client_handle_t client;
+char *json_data_template = (char *)malloc(100 * sizeof(char));
 
-void send_binary(esp_mqtt_client_handle_t client)
+esp_mqtt_client_handle_t client;
+float temperature_reading = 0.0;
+float humidity_reading = 0.0;
+
+void sendData(void *parameters)
 {
-    spi_flash_mmap_handle_t out_handle;
-    const void *binary_address;
-    const esp_partition_t *partition = esp_ota_get_running_partition();
-    esp_partition_mmap(partition, 0, partition->size, SPI_FLASH_MMAP_DATA, &binary_address, &out_handle);
-    // sending only the configured portion of the partition (if it's less than the partition size)
-    int binary_size = MIN(CONFIG_BROKER_BIN_SIZE_TO_SEND, partition->size);
-    int msg_id = esp_mqtt_client_publish(client, "/topic/binary", (const char *)binary_address, binary_size, 0, 0);
-    ESP_LOGI(TAG_MAIN, "binary sent with msg_id=%d", msg_id);
+    while (1)
+    {
+        vTaskDelay((CONFIG_BLINK_PERIOD * 4) / portTICK_PERIOD_MS);
+        sprintf(json_data_template, "{\"temperature\":%.2f, \"humidity\":%f}", temperature_reading, humidity_reading);
+        esp_mqtt_client_publish(client, SEND_DATA_TOPIC, json_data_template, 0, 0, 0);
+    }
+}
+
+void temperature_sensor_task(void *arg)
+{
+    char reading[64];
+    temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
+    temp_sensor_get_config(&temp_sensor);
+    ESP_LOGI(TAG_MAIN, "default dac %d, clk_div %d", temp_sensor.dac_offset, temp_sensor.clk_div);
+    temp_sensor.dac_offset = TSENS_DAC_DEFAULT;
+    temp_sensor_set_config(temp_sensor);
+    temp_sensor_start();
+    ESP_LOGI(TAG_MAIN, "Temperature sensor started");
+    while (1)
+    {
+        vTaskDelay(CONFIG_BLINK_PERIOD / portTICK_PERIOD_MS);
+        temp_sensor_read_celsius(&temperature_reading);
+        snprintf(reading, sizeof reading, "%f", temperature_reading);
+        ESP_LOGI(TAG_MAIN, "Temperature out celsius %f°C", temperature_reading);
+    }
+    vTaskDelete(NULL);
+}
+
+void humidity_sensor_task(void *parameters)
+{
+    H808H5V5 *humidity_sensor;
+    humidity_sensor = (H808H5V5 *)parameters;
+
+    while (1)
+    {
+        vTaskDelay(CONFIG_BLINK_PERIOD / portTICK_PERIOD_MS);
+        humidity_reading = humidity_sensor->readHum();
+    }
+    vTaskDelete(NULL);
 }
 
 void getData(esp_mqtt_event_handle_t event)
 {
-    if (event)
+    char topicName[2] = {event->topic[event->topic_len - 2],
+                         event->topic[event->topic_len - 1]};
+    int topicNum = atoi(topicName);
+    if (topicNum == ROOM_1_ACTUATOR_NUM)
     {
-        isLed = !isLed;
+        isOpen_room1 = !isOpen_room1;
+    }
+    else if (topicNum == ROOM_2_ACTUATOR_NUM)
+    {
+        isOpen_room2 = !isOpen_room2;
     }
     printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
     printf("DATA=%.*s\r\n", event->data_len, event->data);
@@ -67,7 +116,9 @@ extern "C" void mqtt_event_handler(void *handler_args, esp_event_base_t base, in
     {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG_MAIN, "MQTT_EVENT_CONNECTED");
-        msg_id = esp_mqtt_client_subscribe(client, ACTIVATE_TOPIC, 0);
+        msg_id = esp_mqtt_client_subscribe(client, ROOM_1_ACTUATOR_TOPIC, 0);
+        ESP_LOGI(TAG_MAIN, "sent subscribe successful, msg_id=%d", msg_id);
+        msg_id = esp_mqtt_client_subscribe(client, ROOM_2_ACTUATOR_TOPIC, 0);
         ESP_LOGI(TAG_MAIN, "sent subscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
@@ -102,7 +153,7 @@ extern "C" void mqtt_event_handler(void *handler_args, esp_event_base_t base, in
     }
 }
 
-void mqtt_init(void)
+extern "C" void mqtt_init(void)
 {
     esp_mqtt_client_config_t mqtt_cfg = {
         .uri = CONFIG_BROKER_URI,
@@ -124,13 +175,21 @@ void task_loop(void *parameters)
 
     while (1)
     {
-        if (isLed)
+        if (!isOpen_room1 && !isOpen_room2)
         {
-            led->toogleLedState(1);
+            led->setLedState(LedStatus::OFF);
+        }
+        else if (isOpen_room1 && !isOpen_room2)
+        {
+            led->setLedState(LedStatus::ROOM1);
+        }
+        else if (isOpen_room2 && !isOpen_room1)
+        {
+            led->setLedState(LedStatus::ROOM2);
         }
         else
         {
-            led->toogleLedState(0);
+            led->setLedState(LedStatus::ALL);
         }
         led->tick();
         vTaskDelay(CONFIG_BLINK_PERIOD / portTICK_PERIOD_MS);
@@ -150,20 +209,29 @@ extern "C" void app_main(void)
 
     mqtt_init();
 
-    CLed led(LED_PIN);
+    H808H5V5 humidity_sensor(ADC_CHANNEL_HUMIDITY);
+
+    CLed room(LED_PIN_NUM, 0);
 
     ESP_LOGI(TAG_MAIN, "Start Task Create.");
-    xTaskCreate(task_loop,    // Task function
-                "task_loop",  // Name of task in task scheduler
-                1024 * 5,     // Stack size
-                (void *)&led, // Parameter send to function
-                1,            // Priority
-                &xHandle);    // task handler
+
+    xTaskCreate(temperature_sensor_task, "temperature_sensor_task", 2048, NULL, 5, NULL);
+
+    xTaskCreate(humidity_sensor_task, "temperature_sensor_task", 2048, (void *)&humidity_sensor, 5, NULL);
+
+    xTaskCreate(task_loop,
+                "task_loop",
+                1024 * 5,
+                (void *)&room,
+                1,
+                &xHandle);
+
+    xTaskCreate(sendData, "send_data_task", 2048, NULL, 5, NULL);
+
     ESP_LOGI(TAG_MAIN, "Task Created.");
 
     while (1)
     {
-        // esp_mqtt_client_publish(client, ACTIVATE_TOPIC, "{\"temperature\":12}", 0, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

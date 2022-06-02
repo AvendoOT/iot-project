@@ -5,19 +5,18 @@
 
 class H808H5V5
 {
-    public:
-        H808H5V5(adc_channel_t channel);
-        virtual ~H808H5V5();
-        
-        void sendHum();
-        void readHum();
-        float getHum();
+public:
+    H808H5V5(adc_channel_t channel);
+    virtual ~H808H5V5();
 
-    private:
-        float humidity;
-        // void readHum();
-        Adc *m_adc;
-        
+    void sendHum();
+    float readHum();
+    float getHum();
+
+private:
+    float humidity;
+    // void readHum();
+    Adc *m_adc;
 };
 
 #endif

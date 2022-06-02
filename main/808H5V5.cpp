@@ -8,19 +8,15 @@ H808H5V5::H808H5V5(adc_channel_t channel)
 
 H808H5V5::~H808H5V5()
 {
-    
 }
 
 void H808H5V5::sendHum()
 {
-
 }
 
-void H808H5V5::readHum()
+float H808H5V5::readHum()
 {
-    // uint32_t voltage = m_adc->readAdc();
-
-    this->humidity = 38.0;
+    return m_adc->readAdc();
 }
 
 float H808H5V5::getHum()
